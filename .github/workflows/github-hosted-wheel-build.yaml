@@ -1,0 +1,295 @@
+name: Hosted Stable ABI Wheel Build
+
+on:
+  push:
+    branches:
+      - abi3_stable
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-meta:
+    name: Compute nightly release metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+    steps:
+      - name: Compute tag and release name
+        id: meta
+        shell: bash
+        run: |
+          short_sha="${GITHUB_SHA::7}"
+          timestamp="$(date -u +%Y%m%d-%H%M%S)"
+          tag_name="nightly-${GITHUB_SHA}"
+          release_name="Nightly ${timestamp} (${short_sha})"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "release_name=${release_name}" >> "$GITHUB_OUTPUT"
+
+  windows-wheels:
+    name: Windows wheel (CUDA ${{ matrix.cuda }})
+    runs-on: windows-2022
+    needs: release-meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda: "12.8"
+            cuda_short: "128"
+            cuda_major: "12"
+            cuda_minor: "8"
+            cuda_patch: "1"
+          - cuda: "13.0"
+            cuda_short: "130"
+            cuda_major: "13"
+            cuda_minor: "0"
+            cuda_patch: "2"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CUDA toolkit
+        uses: N-Storm/cuda-toolkit@v0.2.28
+        with:
+          cuda: ${{ matrix.cuda_major }}.${{ matrix.cuda_minor }}.${{ matrix.cuda_patch }}
+          use-github-cache: false
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build wheel
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install --upgrade cibuildwheel simpleindex
+
+          $Env:CUDA_MAJOR_VERSION = "${{ matrix.cuda_major }}"
+          $Env:CUDA_MINOR_VERSION = "${{ matrix.cuda_minor }}"
+          $Env:TORCH_MINOR_VERSION = "9"
+          $Env:TORCH_PATCH_VERSION = "0"
+          $Env:TORCH_IS_NIGHTLY = "0"
+          python update_pyproject.py
+
+          $server = Start-Process -NoNewWindow -PassThru simpleindex simpleindex.toml
+          Start-Sleep -Seconds 2
+          $Env:PIP_INDEX_URL = "http://127.0.0.1:8000"
+
+          $Env:DISTUTILS_USE_SDK = "1"
+          $Env:TORCH_CUDA_ARCH_LIST = "8.0 8.6 8.9 9.0 12.0"
+          $Env:SAGEATTENTION_WHEEL_VERSION_SUFFIX = "+cu${{ matrix.cuda_short }}"
+          $Env:CIBW_BUILD = "cp310-win_amd64"
+          $Env:CIBW_BUILD_VERBOSITY = "1"
+          cibuildwheel .
+
+          if (-not $server.HasExited) {
+            Stop-Process -Id $server.Id -Force
+          }
+
+      - name: Verify stable ABI wheel tag
+        shell: pwsh
+        run: |
+          $wheels = Get-ChildItem wheelhouse\*.whl
+          if ($wheels.Count -eq 0) { throw "No wheels found in wheelhouse/" }
+          $wheels | ForEach-Object { Write-Host $_.FullName }
+          foreach ($wheel in $wheels) {
+            if ($wheel.Name -notmatch "cp39-abi3") {
+              throw "Expected cp39-abi3 wheel tag, got: $($wheel.Name)"
+            }
+            if ($wheel.Name -notmatch "\+cu${{ matrix.cuda_short }}-") {
+              throw "Expected +cu${{ matrix.cuda_short }} suffix, got: $($wheel.Name)"
+            }
+          }
+
+      - name: Smoke test wheel import
+        shell: pwsh
+        run: |
+          python -m pip install --no-cache-dir torch==2.9.0 --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }}
+          $wheel = (Get-ChildItem wheelhouse\*.whl | Select-Object -First 1).FullName
+          pip install --no-deps $wheel
+          Push-Location $env:TEMP
+          python -c "import sageattention; print(sageattention.__file__)"
+          Pop-Location
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageattention-windows-cu${{ matrix.cuda_short }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish-nightly-release:
+    name: Publish nightly prerelease
+    runs-on: ubuntu-24.04
+    needs:
+      - release-meta
+      - windows-wheels
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create or update prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.release-meta.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.release-meta.outputs.release_name }}
+          prerelease: true
+          draft: false
+          files: release-artifacts/*.whl
+          fail_on_unmatched_files: true
+          make_latest: false
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-simple-index:
+    name: Publish gh-pages simple index
+    runs-on: ubuntu-24.04
+    needs:
+      - release-meta
+      - windows-wheels
+      - publish-nightly-release
+    steps:
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Prepare gh-pages branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          REPO_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads "$REPO_URL" gh-pages >/dev/null 2>&1; then
+            git clone --depth 1 --branch gh-pages "$REPO_URL" gh-pages
+          else
+            mkdir -p gh-pages
+            pushd gh-pages >/dev/null
+            git init
+            git checkout -b gh-pages
+            git remote add origin "$REPO_URL"
+            popd >/dev/null
+          fi
+
+      - name: Stage simple index metadata and regenerate simple index
+        shell: bash
+        env:
+          TAG_NAME: ${{ needs.release-meta.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p gh-pages/cu128/sageattention
+          mkdir -p gh-pages/cu130/sageattention
+          touch gh-pages/cu128/sageattention/links.tsv
+          touch gh-pages/cu130/sageattention/links.tsv
+
+          release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}"
+
+          urlquote () {
+            python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"
+          }
+
+          upsert_manifest_line () {
+            local manifest="$1"
+            local name="$2"
+            local hash="$3"
+            local url="$4"
+            local tmp
+            tmp="$(mktemp)"
+            awk -F '\t' -v name="$name" '$1 != name' "$manifest" > "$tmp"
+            printf '%s\t%s\t%s\n' "$name" "$hash" "$url" >> "$tmp"
+            mv "$tmp" "$manifest"
+          }
+
+          shopt -s nullglob
+          copied_cu128=0
+          copied_cu130=0
+          for whl in release-artifacts/*.whl; do
+            base="$(basename "$whl")"
+            hash="$(sha256sum "$whl" | awk '{print $1}')"
+            url="${release_base_url}/$(urlquote "$base")"
+            case "$base" in
+              *+cu128-*)
+                upsert_manifest_line "gh-pages/cu128/sageattention/links.tsv" "$base" "$hash" "$url"
+                copied_cu128=$((copied_cu128 + 1))
+                ;;
+              *+cu130-*)
+                upsert_manifest_line "gh-pages/cu130/sageattention/links.tsv" "$base" "$hash" "$url"
+                copied_cu130=$((copied_cu130 + 1))
+                ;;
+              *)
+                echo "Skipping unrecognized wheel name: $base"
+                ;;
+            esac
+          done
+
+          if [[ "$copied_cu128" -eq 0 || "$copied_cu130" -eq 0 ]]; then
+            echo "Expected wheels for both cu128 and cu130, got cu128=${copied_cu128} cu130=${copied_cu130}"
+            exit 1
+          fi
+
+          write_pkg_index () {
+            local cu="$1"
+            local pkg_dir="gh-pages/${cu}/sageattention"
+            local manifest="${pkg_dir}/links.tsv"
+            mkdir -p "$pkg_dir"
+            {
+              echo '<!doctype html><html><body>'
+              sort "$manifest" | while IFS=$'\t' read -r name hash url; do
+                [[ -n "$name" ]] || continue
+                printf '<a href="%s#sha256=%s">%s</a><br/>\n' "$url" "$hash" "$name"
+              done
+              echo '</body></html>'
+            } > "${pkg_dir}/index.html"
+
+            {
+              echo '<!doctype html><html><body>'
+              echo '<a href="sageattention/">sageattention</a>'
+              echo '</body></html>'
+            } > "gh-pages/${cu}/index.html"
+          }
+
+          write_pkg_index "cu128"
+          write_pkg_index "cu130"
+
+          {
+            echo '<!doctype html><html><body>'
+            echo '<a href="cu128/">cu128</a><br/>'
+            echo '<a href="cu130/">cu130</a>'
+            echo '</body></html>'
+          } > gh-pages/index.html
+
+          touch gh-pages/.nojekyll
+
+      - name: Commit and push gh-pages updates
+        shell: bash
+        run: |
+          set -euo pipefail
+          pushd gh-pages >/dev/null
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No gh-pages changes to commit."
+            exit 0
+          fi
+          git commit -m "Update nightly simple index for ${GITHUB_SHA}"
+          git push origin gh-pages
+          popd >/dev/null
