@@ -211,11 +211,16 @@ jobs:
           Push-Location $env:TEMP
           $code = @'
           import importlib.util
+          import os
           import pathlib
           import sysconfig
           import torch
 
           pkg = pathlib.Path(sysconfig.get_paths()["purelib"]) / "sageattention"
+          torch_lib = pathlib.Path(torch.__file__).resolve().parent / "lib"
+          if hasattr(os, "add_dll_directory"):
+              os.add_dll_directory(str(torch_lib))
+              os.add_dll_directory(str(pkg))
           mods = ["_fused", "_qattn_sm80", "_qattn_sm89", "_qattn_sm90"]
           loaded = []
           for name in mods:
@@ -223,7 +228,8 @@ jobs:
               if not matches:
                   raise RuntimeError(f"Missing extension module: {name}")
               path = matches[0]
-              spec = importlib.util.spec_from_file_location(name, path)
+              fq_name = f"sageattention.{name}"
+              spec = importlib.util.spec_from_file_location(fq_name, path)
               if spec is None or spec.loader is None:
                   raise RuntimeError(f"Unable to load spec for {path}")
               module = importlib.util.module_from_spec(spec)
