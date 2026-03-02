@@ -44,13 +44,17 @@ if not SKIP_CUDA_BUILD:
         CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
     CXX_FLAGS += ["-DPy_LIMITED_API=0x03090000", "-DTORCH_STABLE_ONLY"]
 
+    nvcc_threads = os.getenv("NVCC_THREADS", "").strip()
+    if not nvcc_threads:
+        nvcc_threads = str(os.cpu_count())
+
     NVCC_FLAGS_COMMON = [
         "-O3",
         "-std=c++17",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "--use_fast_math",
-        f"--threads={os.cpu_count()}",
+        f"--threads={nvcc_threads}",
         # "-Xptxas=-v",
         "-diag-suppress=174",
         "-diag-suppress=177",

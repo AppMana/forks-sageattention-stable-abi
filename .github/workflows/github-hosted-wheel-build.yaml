@@ -83,7 +83,7 @@ jobs:
           SAGEATTENTION_WHEEL_VERSION_SUFFIX: +cu${{ matrix.cuda_short }}
           EXT_PARALLEL: "2"
           MAX_JOBS: "2"
-          NVCC_APPEND_FLAGS: --threads=1
+          NVCC_THREADS: "1"
         run: |
           set -euo pipefail
           rm -rf build dist
@@ -179,7 +179,7 @@ jobs:
           SAGEATTENTION_WHEEL_VERSION_SUFFIX: +cu${{ matrix.cuda_short }}
           EXT_PARALLEL: "1"
           MAX_JOBS: "1"
-          NVCC_APPEND_FLAGS: --threads=1
+          NVCC_THREADS: "1"
           NVCC_PREPEND_FLAGS: -allow-unsupported-compiler
         run: |
           if (Test-Path build) { Remove-Item -Recurse -Force build }
