@@ -20,6 +20,67 @@ If you see any error, please open an issue at https://github.com/woct0rdho/SageA
 
 Recently we've simplified the installation by a lot. There is no need to install Visual Studio or CUDA toolkit to use Triton and SageAttention (unless you want to step into the world of building from source)
 
+## Stable ABI Wheels (Torch 2.9+)
+
+This fork publishes `cp39-abi3` wheels for PyTorch 2.9+ on a PyTorch-style simple index:
+
+* `https://appmana.github.io/forks-sageattention-stable-abi/cu128/`
+* `https://appmana.github.io/forks-sageattention-stable-abi/cu130/`
+
+Install the matching PyTorch build first, then install SageAttention from the matching AppMana index.
+
+### pip
+
+CUDA 12.8:
+
+```bash
+pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cu128
+pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps sageattention
+```
+
+CUDA 13.0:
+
+```bash
+pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cu130
+pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps sageattention
+```
+
+On Windows, install `triton-windows` separately before importing `sageattention`, because upstream Triton wheels are not published for Windows.
+
+### uv
+
+One-off installs:
+
+```bash
+uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu128
+uv pip install --system --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps sageattention
+```
+
+```bash
+uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu130
+uv pip install --system --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps sageattention
+```
+
+Project configuration with `uv` indexes and sources:
+
+```toml
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "sageattention-cu128"
+url = "https://appmana.github.io/forks-sageattention-stable-abi/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+sageattention = { index = "sageattention-cu128" }
+```
+
+Use the same pattern for `cu130` by swapping both index URLs.
+
 ## Use notes
 
 Before using SageAttention in larger projects like ComfyUI, please run [test_sageattn.py](https://github.com/woct0rdho/SageAttention/blob/main/tests/test_sageattn.py) to test if SageAttention itself works.
