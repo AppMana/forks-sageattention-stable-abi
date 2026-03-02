@@ -1,6 +1,9 @@
 # SageAttention Stable ABI Wheels
 
-This fork publishes `cp39-abi3` wheels for PyTorch 2.9+.
+This fork publishes wheels built with:
+
+* Python stable ABI (`cp39-abi3`, compatible with Python 3.9+)
+* PyTorch stable ABI (compatible with PyTorch 2.9+)
 
 The default branch for this fork is `abi3_stable`.
 
