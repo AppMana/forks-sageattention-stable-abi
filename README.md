@@ -1,67 +1,53 @@
-# [SageAttention](https://github.com/thu-ml/SageAttention) fork for Windows wheels and easy installation
+# SageAttention Stable ABI Wheels
 
-This repo makes it easy to build SageAttention for multiple Python, PyTorch, and CUDA versions, then distribute the wheels to other people.
+This fork publishes `cp39-abi3` wheels for PyTorch 2.9+.
 
-The latest wheels support GTX 16xx, RTX 20xx/30xx/40xx/50xx, V100, A100, H100, AGX Orin (sm70/75/80/86/87/89/90/120). There are also reports that it works with B200 (sm100) and DGX Spark (sm121), but I did not bundle these kernels in the wheels, and you need to build from source.
+The default branch for this fork is `abi3_stable`.
 
-## Installation
-
-1. Know how to use pip to install packages in the correct Python environment, see https://github.com/woct0rdho/triton-windows
-2. Install triton-windows
-3. Install a wheel in the release page: https://github.com/woct0rdho/SageAttention/releases
-    * Unlike triton-windows, you need to manually choose a wheel in the GitHub release page for SageAttention
-    * Choose the wheel for your PyTorch version. For example, 'torch2.7.0' in the filename
-        * The torch minor version (2.6/2.7 ...) must be correct, but the patch version (2.7.0/2.7.1 ...) can be different from yours
-    * No need to worry about the CUDA minor version (12.8/12.9 ...). It can be different from yours, because SageAttention does not yet use any breaking API
-        * But there is a difference between CUDA 12 and 13
-    * No need to worry about the Python minor version (3.10/3.11 ...). The recent wheels use Python Stable ABI (also known as ABI3) and have `cp39-abi3` in the filenames, so they support Python >= 3.9
-
-If you see any error, please open an issue at https://github.com/woct0rdho/SageAttention/issues
-
-Recently we've simplified the installation by a lot. There is no need to install Visual Studio or CUDA toolkit to use Triton and SageAttention (unless you want to step into the world of building from source)
-
-## Stable ABI Wheels (Torch 2.9+)
-
-This fork publishes `cp39-abi3` wheels for PyTorch 2.9+ on a PyTorch-style simple index:
+## Indexes
 
 * `https://appmana.github.io/forks-sageattention-stable-abi/cu128/`
 * `https://appmana.github.io/forks-sageattention-stable-abi/cu130/`
 
-Install the matching PyTorch build first, then install SageAttention from the matching AppMana index.
+Each index contains one package:
 
-### pip
+* `sageattention`
+
+## Install With pip
 
 CUDA 12.8:
 
 ```bash
 pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cu128
-pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps sageattention
+pip install sageattention --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps
 ```
 
 CUDA 13.0:
 
 ```bash
 pip install torch==2.9.0 --index-url https://download.pytorch.org/whl/cu130
-pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps sageattention
+pip install sageattention --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps
 ```
 
-On Windows, install `triton-windows` separately before importing `sageattention`, because upstream Triton wheels are not published for Windows.
+On Windows, install `triton-windows` separately before importing `sageattention`.
 
-### uv
+## Install With uv
 
-One-off installs:
+CUDA 12.8:
 
 ```bash
 uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu128
-uv pip install --system --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps sageattention
+uv pip install --system sageattention --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu128 --no-deps
 ```
+
+CUDA 13.0:
 
 ```bash
 uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu130
-uv pip install --system --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps sageattention
+uv pip install --system sageattention --index-url https://appmana.github.io/forks-sageattention-stable-abi/cu130 --no-deps
 ```
 
-Project configuration with `uv` indexes and sources:
+`pyproject.toml` example for `uv`:
 
 ```toml
 [[tool.uv.index]]
@@ -79,38 +65,25 @@ torch = { index = "pytorch-cu128" }
 sageattention = { index = "sageattention-cu128" }
 ```
 
-Use the same pattern for `cu130` by swapping both index URLs.
+For `cu130`, replace both URLs with the `cu130` indexes.
 
-## Use notes
+## Build
 
-Before using SageAttention in larger projects like ComfyUI, please run [test_sageattn.py](https://github.com/woct0rdho/SageAttention/blob/main/tests/test_sageattn.py) to test if SageAttention itself works.
+Install the matching PyTorch build, then build from source.
 
-To use SageAttention in ComfyUI, you just need to add `--use-sage-attention` when starting ComfyUI.
+With `uv`:
 
-Some recent models, such as Wan and Qwen-Image, may produce black or noise output when SageAttention is used, because some intermediate values overflow SageAttention's quantization. In this case, you may use the `PatchSageAttentionKJ` node in KJNodes, and choose `sageattn_qk_int8_pv_fp16_cuda`, which is the least likely to overflow.
+```bash
+uv pip install --system packaging setuptools wheel numpy ninja
+uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu128
+TORCH_CUDA_ARCH_LIST="8.0 8.6 8.7 8.9 9.0 10.0 12.0" python setup.py bdist_wheel --verbose
+```
 
-Also, if you want to run Flux or Qwen-Image, try [Nunchaku](https://github.com/mit-han-lab/ComfyUI-nunchaku) if you haven't. It's faster and more accurate than GGUF Q4_0 + SageAttention.
+Or for CUDA 13.0:
 
-If you want to run Wan, try [RadialAttention](https://github.com/woct0rdho/ComfyUI-RadialAttn) if you haven't. It's also faster than SageAttention.
+```bash
+uv pip install --system torch==2.9.0 --index-url https://download.pytorch.org/whl/cu130
+TORCH_CUDA_ARCH_LIST="8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1" python setup.py bdist_wheel --verbose
+```
 
-## Build from source
-
-(This is for developers)
-
-If you need to build and run SageAttention on your own machine:
-1. Install Visual Studio (MSVC and Windows SDK), and CUDA toolkit
-2. Clone this repo
-   * Checkout `abi3_stable` branch if you want ABI3 and libtorch stable ABI, which supports PyTorch >= 2.9
-   * Checkout `abi3` branch if you want ABI3, which supports PyTorch >= 2.4
-   * The purpose of ABI3 and libtorch stable ABI is to avoid building many wheels. There is no functional difference from the main branch
-4. Install the dependencies in [`pyproject.toml`](https://github.com/woct0rdho/SageAttention/blob/main/pyproject.toml), including the desired torch version such as `torch 2.7.1+cu128`
-5. Run `python setup.py install --verbose` to install directly, or `python setup.py bdist_wheel --verbose` to build a wheel. This avoids the environment checks of pip
-
-## Dev notes
-
-* The wheels are built using the [workflow](https://github.com/woct0rdho/SageAttention/blob/main/.github/workflows/build-sageattn.yml)
-    * It's tricky to specify both torch (with index URL at download.pytorch.org ) and pybind11 (not in that index URL) in an isolated build environment. The easiest way I could think of is to use [simpleindex](https://github.com/uranusjr/simpleindex)
-* CUDA kernels for sm80/89/90 are bundled in the wheels, and also sm120 for CUDA >= 12.8
-* For RTX 20xx, SageAttention 2 runs Triton kernels, which are the same as SageAttention 1. If you want to help improve the CUDA kernels for RTX 20xx, you may see https://github.com/Ph0rk0z/SageAttention2/tree/updates
-* The wheels do not use CXX11 ABI
-* We cannot publish the wheels to PyPI, because PyPI does not support multiple PyTorch/CUDA variants for the same version of SageAttention. Some people are working on this, see https://astral.sh/blog/introducing-pyx and https://wheelnext.dev/proposals/pep817_wheel_variant_support/
+The built wheel will be written to `dist/`.
