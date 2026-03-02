@@ -28,6 +28,97 @@ jobs:
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "release_name=${release_name}" >> "$GITHUB_OUTPUT"
 
+  linux-wheels:
+    name: Linux wheel (CUDA ${{ matrix.cuda }})
+    runs-on: ubuntu-24.04
+    needs: release-meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cuda: "12.8"
+            cuda_short: "128"
+            cuda_toolkit: "12.8.1"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0"
+          - cuda: "13.0"
+            cuda_short: "130"
+            cuda_toolkit: "13.0.2"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        shell: bash
+        run: python -m pip install --upgrade pip uv
+
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@v0.2.29
+        with:
+          cuda: ${{ matrix.cuda_toolkit }}
+          method: network
+          log-file-suffix: linux-cu${{ matrix.cuda_short }}
+
+      - name: Show nvcc version
+        shell: bash
+        run: nvcc --version
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv pip install --system packaging setuptools wheel numpy ninja
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.9.0
+
+      - name: Build wheel
+        shell: bash
+        env:
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.arch_list }}
+          SAGEATTENTION_WHEEL_VERSION_SUFFIX: +cu${{ matrix.cuda_short }}
+          EXT_PARALLEL: "2"
+          MAX_JOBS: "2"
+          NVCC_APPEND_FLAGS: --threads=1
+        run: |
+          set -euo pipefail
+          rm -rf build dist
+          python setup.py bdist_wheel --verbose
+
+      - name: Verify stable ABI wheel tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist/*.whl
+          for whl in dist/*.whl; do
+            case "$whl" in
+              *cp39-abi3*+cu${{ matrix.cuda_short }}-*|*+cu${{ matrix.cuda_short }}-cp39-abi3*) ;;
+              *)
+                echo "Unexpected wheel tag: $whl"
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Smoke test wheel import
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.9.0
+          uv pip install --system --no-deps dist/*.whl
+          cd /tmp
+          python -c 'import sageattention; print(sageattention.__file__)'
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageattention-linux-cu${{ matrix.cuda_short }}
+          path: dist/*.whl
+          if-no-files-found: error
+
   windows-wheels:
     name: Windows wheel (CUDA ${{ matrix.cuda }})
     runs-on: windows-2022
@@ -38,14 +129,12 @@ jobs:
         include:
           - cuda: "12.8"
             cuda_short: "128"
-            cuda_major: "12"
-            cuda_minor: "8"
-            cuda_patch: "1"
+            cuda_toolkit: "12.8.1"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0"
           - cuda: "13.0"
             cuda_short: "130"
-            cuda_major: "13"
-            cuda_minor: "0"
-            cuda_patch: "2"
+            cuda_toolkit: "13.0.2"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -55,50 +144,51 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install uv
+        shell: pwsh
+        run: python -m pip install --upgrade pip uv
+
       - name: Install CUDA toolkit
         uses: N-Storm/cuda-toolkit@v0.2.28
         with:
-          cuda: ${{ matrix.cuda_major }}.${{ matrix.cuda_minor }}.${{ matrix.cuda_patch }}
+          cuda: ${{ matrix.cuda_toolkit }}
           use-github-cache: false
+
+      - name: Show nvcc version
+        shell: pwsh
+        run: nvcc --version
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      - name: Build wheel
+      - name: Install build dependencies
         shell: pwsh
         run: |
-          python -m pip install --upgrade pip
-          pip install --upgrade cibuildwheel simpleindex
+          uv pip install --system packaging setuptools wheel numpy ninja
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.9.0
 
-          $Env:CUDA_MAJOR_VERSION = "${{ matrix.cuda_major }}"
-          $Env:CUDA_MINOR_VERSION = "${{ matrix.cuda_minor }}"
-          $Env:TORCH_MINOR_VERSION = "9"
-          $Env:TORCH_PATCH_VERSION = "0"
-          $Env:TORCH_IS_NIGHTLY = "0"
-          python update_pyproject.py
-
-          $server = Start-Process -NoNewWindow -PassThru simpleindex simpleindex.toml
-          Start-Sleep -Seconds 2
-          $Env:PIP_INDEX_URL = "http://127.0.0.1:8000"
-
-          $Env:DISTUTILS_USE_SDK = "1"
-          $Env:TORCH_CUDA_ARCH_LIST = "8.0 8.6 8.9 9.0 12.0"
-          $Env:SAGEATTENTION_WHEEL_VERSION_SUFFIX = "+cu${{ matrix.cuda_short }}"
-          $Env:CIBW_BUILD = "cp310-win_amd64"
-          $Env:CIBW_BUILD_VERBOSITY = "1"
-          cibuildwheel .
-
-          if (-not $server.HasExited) {
-            Stop-Process -Id $server.Id -Force
-          }
+      - name: Build wheel
+        shell: pwsh
+        env:
+          DISTUTILS_USE_SDK: "1"
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.arch_list }}
+          SAGEATTENTION_WHEEL_VERSION_SUFFIX: +cu${{ matrix.cuda_short }}
+          EXT_PARALLEL: "1"
+          MAX_JOBS: "1"
+          NVCC_APPEND_FLAGS: --threads=1
+          NVCC_PREPEND_FLAGS: -allow-unsupported-compiler
+        run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          python setup.py bdist_wheel --verbose
 
       - name: Verify stable ABI wheel tag
         shell: pwsh
         run: |
-          $wheels = Get-ChildItem wheelhouse\*.whl
-          if ($wheels.Count -eq 0) { throw "No wheels found in wheelhouse/" }
+          $wheels = Get-ChildItem dist\*.whl
+          if ($wheels.Count -eq 0) { throw "No wheels found in dist/" }
           $wheels | ForEach-Object { Write-Host $_.FullName }
           foreach ($wheel in $wheels) {
             if ($wheel.Name -notmatch "cp39-abi3") {
@@ -112,9 +202,9 @@ jobs:
       - name: Smoke test wheel import
         shell: pwsh
         run: |
-          python -m pip install --no-cache-dir torch==2.9.0 --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }}
-          $wheel = (Get-ChildItem wheelhouse\*.whl | Select-Object -First 1).FullName
-          pip install --no-deps $wheel
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.9.0
+          $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
+          uv pip install --system --no-deps $wheel
           Push-Location $env:TEMP
           python -c "import sageattention; print(sageattention.__file__)"
           Pop-Location
@@ -123,7 +213,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sageattention-windows-cu${{ matrix.cuda_short }}
-          path: wheelhouse/*.whl
+          path: dist/*.whl
           if-no-files-found: error
 
   publish-nightly-release:
@@ -131,6 +221,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - release-meta
+      - linux-wheels
       - windows-wheels
     steps:
       - name: Download wheel artifacts
@@ -159,6 +250,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - release-meta
+      - linux-wheels
       - windows-wheels
       - publish-nightly-release
     steps:
