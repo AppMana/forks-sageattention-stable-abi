@@ -5,6 +5,8 @@ This fork publishes wheels built with:
 * Python stable ABI (`cp39-abi3`, compatible with Python 3.9+)
 * PyTorch stable ABI (compatible with PyTorch 2.9+)
 
+The latest wheels support GTX 16xx, RTX 20xx/30xx/40xx/50xx, A100, H100, and AGX Orin (sm75/80/86/87/89/90/120). There are also reports that SageAttention works with B200 (sm100) and DGX Spark (sm121), but those kernels are not bundled in these wheels and require building from source.
+
 The default branch for this fork is `abi3_stable`.
 
 ## Indexes
@@ -90,3 +92,13 @@ TORCH_CUDA_ARCH_LIST="8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1" python setup.py bdist_
 ```
 
 The built wheel will be written to `dist/`.
+
+## Dev Notes
+
+* The wheels are built using the [workflow](https://github.com/woct0rdho/SageAttention/blob/main/.github/workflows/build-sageattn.yml)
+    * It is tricky to specify both torch (from `download.pytorch.org`) and pybind11 (not in that index) in an isolated build environment. The simplest approach here is [simpleindex](https://github.com/uranusjr/simpleindex).
+* CUDA kernels for sm80/89/90 are bundled in the wheels, and also sm120 for CUDA >= 12.8
+* For Turing GPUs (GTX 16xx, RTX 20xx), SageAttention 2 runs Triton kernels, which are the same as SageAttention 1. If you want to help improve the CUDA kernels for Turing, you may see https://github.com/Ph0rk0z/SageAttention2/tree/updates
+* Volta GPUs (V100) are not supported because they do not have int8 tensor core
+* The wheels do not use CXX11 ABI
+* We cannot publish the wheels to PyPI, because PyPI does not support multiple PyTorch/CUDA variants for the same version of SageAttention. Some people are working on this, see https://astral.sh/blog/introducing-pyx and https://wheelnext.dev/proposals/pep817_wheel_variant_support/
