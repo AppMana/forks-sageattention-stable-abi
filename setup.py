@@ -23,6 +23,21 @@ from packaging.version import parse, Version
 
 from setuptools import setup, find_packages
 
+
+def get_git_commit_timestamp():
+    try:
+        timestamp = subprocess.check_output(
+            ["git", "-C", os.path.dirname(os.path.abspath(__file__)), "log", "-1", "--format=%ct"]
+        ).strip().decode("utf-8")
+    except Exception:
+        return None
+    return timestamp if timestamp.isdigit() else None
+
+
+# Make wheel ZIP metadata deterministic
+# If SOURCE_DATE_EPOCH is unspecified, then query with git, then fallback to Unix epoch
+os.environ.setdefault("SOURCE_DATE_EPOCH", get_git_commit_timestamp() or "315532800")
+
 # Skip CUDA build in CI or when explicitly requested
 SKIP_CUDA_BUILD = (
     os.getenv("SAGEATTN_SKIP_CUDA_BUILD", "0").upper() in {"1", "TRUE", "YES"}
@@ -36,35 +51,45 @@ if not SKIP_CUDA_BUILD:
     import torch
     from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
+    def add_windows_reproducible_path_flags(cxx_flags, nvcc_flags, path_mappings):
+        if os.name != "nt":
+            return
+
+        cxx_flags.append("/experimental:deterministic")
+        nvcc_flags.extend(["-Xcompiler", "/experimental:deterministic"])
+
+        for source, target in path_mappings:
+            source = os.path.normpath(os.path.realpath(source))
+            cxx_flags.append(f"/pathmap:{source}={target}")
+            nvcc_flags.extend(["-Xcompiler", f"/pathmap:{source}={target}"])
+
     # Compiler flags.
     if os.name == "nt":
         # TODO: Detect MSVC rather than OS
-        CXX_FLAGS = ["/O2", "/openmp", "/std:c++17", "/permissive-", "-DENABLE_BF16"]
+        CXX_FLAGS = ["/O2", "/permissive-", "-DENABLE_BF16"]
+        LINK_FLAGS = ["/Brepro"]
     else:
-        CXX_FLAGS = ["-g", "-O3", "-fopenmp", "-lgomp", "-std=c++17", "-DENABLE_BF16"]
-    CXX_FLAGS += ["-DPy_LIMITED_API=0x03090000", "-DTORCH_STABLE_ONLY"]
-
-    nvcc_threads = os.getenv("NVCC_THREADS", "").strip()
-    if not nvcc_threads:
-        nvcc_threads = str(os.cpu_count())
+        CXX_FLAGS = ["-O3", "-DENABLE_BF16"]
+        LINK_FLAGS = []
+    CXX_FLAGS += ["-DPy_LIMITED_API=0x030A0000", "-DTORCH_STABLE_ONLY"]
 
     NVCC_FLAGS_COMMON = [
         "-O3",
-        "-std=c++17",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
         "--use_fast_math",
-        f"--threads={nvcc_threads}",
+        f"--threads={os.cpu_count()}",
         # "-Xptxas=-v",
         "-diag-suppress=174",
         "-diag-suppress=177",
         "-diag-suppress=221",
-        "-DPy_LIMITED_API=0x03090000",
+        "-DPy_LIMITED_API=0x030A0000",
         "-DTORCH_STABLE_ONLY",
     ]
     if os.name == "nt":
         # https://github.com/pytorch/pytorch/issues/148317
         NVCC_FLAGS_COMMON += [
+            "-Xcompiler=/Zc:preprocessor",
             "-D_WIN32=1",
             "-DUSE_CUDA=1",
         ]
@@ -77,13 +102,23 @@ if not SKIP_CUDA_BUILD:
     if nvcc_append:
         NVCC_FLAGS_COMMON += nvcc_append.split()
 
-    ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
-    CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
-    NVCC_FLAGS_COMMON += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+    if os.name != "nt":
+        ABI = 1 if torch._C._GLIBCXX_USE_CXX11_ABI else 0
+        CXX_FLAGS += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
+        NVCC_FLAGS_COMMON += [f"-D_GLIBCXX_USE_CXX11_ABI={ABI}"]
 
     if CUDA_HOME is None:
         raise RuntimeError(
             "Cannot find CUDA_HOME. CUDA must be available to build the package.")
+
+    add_windows_reproducible_path_flags(
+        CXX_FLAGS,
+        NVCC_FLAGS_COMMON,
+        [
+            (os.path.dirname(os.path.abspath(__file__)), r"C:\reproducible\path\SageAttention"),
+            (os.path.dirname(os.path.abspath(torch.__file__)), r"C:\reproducible\path\torch"),
+        ],
+    )
 
     def get_nvcc_cuda_version(cuda_dir: str) -> Version:
         """Get the CUDA version from nvcc.
@@ -113,6 +148,14 @@ if not SKIP_CUDA_BUILD:
                 warnings.warn(f"skipping GPU {i} with compute capability {major}.{minor}")
                 continue
             compute_capabilities.add(f"{major}.{minor}")
+
+    def capability_sort_key(capability):
+        base = capability.split("+")[0]
+        major, minor = base.split(".")
+        return (int(major), int(minor), capability)
+
+    # Sort compute_capabilities for reproducible build
+    compute_capabilities = sorted(compute_capabilities, key=capability_sort_key)
 
     nvcc_cuda_version = get_nvcc_cuda_version(CUDA_HOME)
 
@@ -169,6 +212,7 @@ if not SKIP_CUDA_BUILD:
                     # Build binary for sm80 if sm86/87 is detected. No need to build binary for sm86/87
                     "nvcc": get_nvcc_flags(["8.0"]),
                 },
+                extra_link_args=LINK_FLAGS,
                 py_limited_api=True,
             )
         )
@@ -191,6 +235,7 @@ if not SKIP_CUDA_BUILD:
                     "cxx": CXX_FLAGS,
                     "nvcc": get_nvcc_flags(["8.9", "10.0", "12.0", "12.1"]),
                 },
+                extra_link_args=LINK_FLAGS,
                 py_limited_api=True,
             )
         )
@@ -208,6 +253,7 @@ if not SKIP_CUDA_BUILD:
                     "cxx": CXX_FLAGS,
                     "nvcc": get_nvcc_flags(["9.0"]),
                 },
+                extra_link_args=LINK_FLAGS,
                 py_limited_api=True,
             )
         )
@@ -223,6 +269,7 @@ if not SKIP_CUDA_BUILD:
                 "cxx": CXX_FLAGS,
                 "nvcc": get_nvcc_flags(["8.0", "8.9", "9.0", "10.0", "12.0", "12.1"]),
             },
+            extra_link_args=LINK_FLAGS,
             py_limited_api=True,
         )
     )
@@ -278,8 +325,8 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/thu-ml/SageAttention',
     packages=find_packages(),
-    python_requires='>=3.9',
+    python_requires='>=3.10',
     ext_modules=ext_modules,
     cmdclass=cmdclass,
-    options={"bdist_wheel": {"py_limited_api": "cp39"}},
+    options={"bdist_wheel": {"py_limited_api": "cp310"}},
 )
