@@ -24,17 +24,14 @@
 #include <torch/csrc/stable/tensor_struct.h>
 #include <torch/headeronly/util/Exception.h>
 
-extern "C" AOTI_TORCH_EXPORT AOTITorchError
-aoti_torch_get_current_cuda_stream(int32_t device_index, void **ret_stream);
-
 inline torch::stable::accelerator::DeviceGuard make_device_guard(const torch::stable::Tensor &tensor) {
   return torch::stable::accelerator::DeviceGuard(tensor.get_device_index());
 }
 
 inline cudaStream_t get_current_cuda_stream(const torch::stable::Tensor &tensor) {
-  // This shim is exported by libtorch_cuda but is missing from some torch
-  // headers. Declare it above so stable-ABI extensions can still launch on the
-  // active CUDA stream instead of falling back to the default stream.
+  // We rely on the raw shim API to get the current CUDA stream.
+  // This will be improved in a future release of PyTorch, see https://docs.pytorch.org/tutorials/advanced/cpp_custom_ops.html
+  // This is needed because torch.compile may launch kernels on non-default streams.
   // Use this while a tensor-device guard is alive for multi-GPU correctness.
   const auto device_index = tensor.get_device_index();
   void *stream_ptr = nullptr;

@@ -6,6 +6,8 @@ The latest wheels support GTX 16xx, RTX 20xx/30xx/40xx/50xx, A100, H100, AGX Ori
 
 ## Installation
 
+**Update:** If you're using ComfyUI, you no longer need to install my SageAttention wheel. You can use the SageAttention in comfy-kitchen.
+
 1. Know how to use pip to install packages in the correct Python environment, see https://github.com/woct0rdho/triton-windows
 2. Install triton-windows
 3. Install a wheel on the release page: https://github.com/woct0rdho/SageAttention/releases
@@ -41,7 +43,8 @@ If you need to build and run SageAttention on your own machine:
    * Checkout `abi3` branch if you want ABI3, which supports PyTorch >= 2.4
    * There is no Python API difference between `main/abi3/abi3_stable` branches, but I recommend `abi3_stable` whenever possible, because it's more compatible with other PyTorch features such as `torch.compile` and multi-GPU
 3. Install the dependencies in [`pyproject.toml`](https://github.com/woct0rdho/SageAttention/blob/main/pyproject.toml), including the desired torch version such as `torch 2.10.0+cu128`
-4. Run `python setup.py install --verbose` to install directly, or `python setup.py bdist_wheel --verbose` to build a wheel. This avoids the environment checks of pip
+4. Run `python setup.py install --verbose` to install directly, or `python setup.py bdist_wheel --verbose` to build a wheel
+   * This avoids the environment checks of pip. There are warnings like `Please avoid running ``setup.py`` directly`, but currently it's the simplest way to deal with the exact version of torch
 
 ## Dev notes
 
