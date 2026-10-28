@@ -295,13 +295,14 @@ if not SKIP_CUDA_BUILD:
             "-diag-suppress=221",
             "-DPy_LIMITED_API=0x030A0000",
             "-DTORCH_STABLE_ONLY",
+            # declares the shim's CUDA entry points (aoti_torch_get_current_cuda_stream, utils.cuh) on every OS
+            "-DUSE_CUDA=1",
         ]
         if os.name == "nt":
             # https://github.com/pytorch/pytorch/issues/148317
             NVCC_FLAGS_COMMON += [
                 "-Xcompiler=/Zc:preprocessor",
                 "-D_WIN32=1",
-                "-DUSE_CUDA=1",
             ]
 
         # Append flags from env if provided
