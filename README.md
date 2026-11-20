@@ -24,7 +24,7 @@ We've simplified the installation by a lot. There is no need to install Visual S
 
 ### AppMana ROCm wheels
 
-With AMD PyTorch 2.14 for ROCm 10.1 installed, use this index on Linux or Windows:
+Install AMD PyTorch 2.14 for ROCm 10.1 first. On Windows, also run `pip install "triton-windows<3.10"`.
 
 ```sh
 pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/rocm10.1/ sageattention
