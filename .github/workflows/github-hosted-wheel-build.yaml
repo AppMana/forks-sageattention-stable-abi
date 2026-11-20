@@ -291,6 +291,7 @@ jobs:
       ROCM_INDEX_URL: https://stable.repo.amd.com/rocm/whl-next/
       GPU_ARCHS: 'gfx1200;gfx1201'
       MAX_JOBS: '1'
+      SAGEATTENTION_WHEEL_VERSION_SUFFIX: '.post1+rocm10.1torch2.14'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -305,11 +306,21 @@ jobs:
             'torch[device-gfx1200]==2.14.0+rocm10.1.0' 'rocm-sdk-devel==10.1.0'
           rocm-sdk init
           python -c 'import torch; assert torch.version.hip; print(torch.__version__, torch.version.hip)'
-      - name: Build and validate wheel
+      - name: Build Linux wheel
+        if: runner.os == 'Linux'
         run: |
-          export SAGEATTENTION_WHEEL_VERSION_SUFFIX='.post1+rocm10.1torch2.14'
-          if [[ "$RUNNER_OS" == Windows ]]; then export DISTUTILS_USE_SDK=1; fi
           python -m pip wheel . --no-build-isolation --no-deps --wheel-dir wheelhouse
+      - name: Build Windows wheel
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          DISTUTILS_USE_SDK: '1'
+        run: |
+          $linker = (Get-Command link.exe).Source
+          if ($linker -notlike "*\VC\Tools\MSVC\*") { throw "Expected the Microsoft linker, got $linker" }
+          python -m pip wheel . --no-build-isolation --no-deps --wheel-dir wheelhouse
+      - name: Validate wheel contents
+        run: |
           python -c 'import glob, zipfile; wheel, = glob.glob("wheelhouse/*.whl"); assert "cp310-abi3" in wheel; assert "sageattention/rocm/triton_attn.py" in zipfile.ZipFile(wheel).namelist()'
       - uses: actions/upload-artifact@v4
         with:
