@@ -303,6 +303,7 @@ jobs:
           python -m pip install --upgrade pip numpy packaging setuptools wheel ninja
           python -m pip install --no-cache-dir --index-url "$ROCM_INDEX_URL" \
             'torch[device-gfx1200]==2.14.0+rocm10.1.0' 'rocm-sdk-devel==10.1.0'
+          rocm-sdk init
           python -c 'import torch; assert torch.version.hip; print(torch.__version__, torch.version.hip)'
       - name: Build and validate wheel
         run: |

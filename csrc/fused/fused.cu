@@ -78,7 +78,11 @@ __device__ __forceinline__ T convert_from_float(float val)
   }
   else if constexpr (std::is_same<T, nv_bfloat16>::value)
   {
+#if defined(__HIP_PLATFORM_AMD__)
+    return __float2bfloat16(val);
+#else
     return __float2bfloat16_rn(val);
+#endif
   }
 }
 
