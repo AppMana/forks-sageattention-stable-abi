@@ -1,0 +1,37 @@
+name: Verify ROCm package index
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  import-wheel:
+    name: Install and import on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install AMD PyTorch
+        run: python -m pip install --no-cache-dir --index-url https://stable.repo.amd.com/rocm/whl-next/ "torch[device-gfx1200]==2.14.0+rocm10.1.0"
+      - name: Install Triton on Windows
+        if: runner.os == 'Windows'
+        run: python -m pip install "triton-windows<3.10"
+      - name: Install SageAttention from the ROCm index
+        run: >-
+          python -m pip install --no-cache-dir --only-binary=:all:
+          --index-url https://appmana.github.io/forks-sageattention-stable-abi/rocm10.1/ sageattention
+      - name: Import the package and native extensions
+        run: >-
+          python -c "from importlib.metadata import version;
+          import torch, sageattention;
+          from sageattention import _fused, _qattn_gfx12_native;
+          assert torch.version.hip and '+rocm10.1' in version('sageattention');
+          print(torch.__version__, version('sageattention'))"
