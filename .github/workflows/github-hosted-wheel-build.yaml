@@ -66,7 +66,7 @@ jobs:
         run: python -m pip install --upgrade pip uv
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.29
+        uses: Jimver/cuda-toolkit@v0.2.32
         with:
           cuda: ${{ matrix.cuda_toolkit }}
           method: network
@@ -165,7 +165,7 @@ jobs:
         run: python -m pip install --upgrade pip uv
 
       - name: Install CUDA toolkit
-        uses: Jimver/cuda-toolkit@v0.2.29
+        uses: Jimver/cuda-toolkit@v0.2.32
         with:
           cuda: ${{ matrix.cuda_toolkit }}
           method: network
@@ -318,7 +318,8 @@ jobs:
           if-no-files-found: error
 
   publish-nightly-release:
-    name: Publish nightly prerelease
+    name: Publish nightly prerelease and package index
+    if: ${{ !cancelled() && needs.release-meta.result == 'success' }}
     runs-on: ubuntu-24.04
     needs:
       - release-meta
@@ -331,16 +332,24 @@ jobs:
         with:
           path: release-artifacts
           merge-multiple: true
-      - name: Validate wheel artifact count
+      - name: Select complete backend pairs
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          wheels=(release-artifacts/*.whl)
-          count="${#wheels[@]}"
-          if [[ "$count" -ne 8 ]]; then
-            echo "Expected exactly 8 wheel artifacts, found ${count}"
-            printf '%s\n' "${wheels[@]}"
+          mkdir publishable-wheels
+          for suffix in cu128 cu130 cu132 rocm10.1torch2.14; do
+            linux=(release-artifacts/*+"$suffix"-cp310-abi3-linux_x86_64.whl)
+            windows=(release-artifacts/*+"$suffix"-cp310-abi3-win_amd64.whl)
+            if [[ "${#linux[@]}" -eq 1 && "${#windows[@]}" -eq 1 ]]; then
+              cp "${linux[0]}" "${windows[0]}" publishable-wheels/
+            else
+              echo "::warning::Skipping $suffix because its Linux and Windows wheel pair is incomplete"
+            fi
+          done
+          wheels=(publishable-wheels/*.whl)
+          if [[ "${#wheels[@]}" -eq 0 ]]; then
+            echo "::error::No complete wheel pairs are available"
             exit 1
           fi
 
@@ -352,28 +361,12 @@ jobs:
           name: ${{ needs.release-meta.outputs.release_name }}
           prerelease: true
           draft: false
-          files: release-artifacts/*.whl
+          files: publishable-wheels/*.whl
           fail_on_unmatched_files: true
           make_latest: false
           overwrite_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  publish-simple-index:
-    name: Publish gh-pages simple index
-    runs-on: ubuntu-24.04
-    needs:
-      - release-meta
-      - linux-wheels
-      - windows-wheels
-      - rocm-wheels
-      - publish-nightly-release
-    steps:
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: release-artifacts
-          merge-multiple: true
 
       - name: Prepare gh-pages branch
         shell: bash
@@ -424,44 +417,19 @@ jobs:
           }
 
           shopt -s nullglob
-          copied_cu128=0
-          copied_cu130=0
-          copied_cu132=0
-          copied_rocm101=0
-          total_wheels=0
-          for whl in release-artifacts/*.whl; do
+          for whl in publishable-wheels/*.whl; do
             base="$(basename "$whl")"
+            case "$base" in
+              *+cu128-*) backend=cu128 ;;
+              *+cu130-*) backend=cu130 ;;
+              *+cu132-*) backend=cu132 ;;
+              *+rocm10.1torch2.14-*) backend=rocm10.1 ;;
+              *) echo "Unrecognized wheel name: $base"; exit 1 ;;
+            esac
             hash="$(sha256sum "$whl" | awk '{print $1}')"
             url="${release_base_url}/$(urlquote "$base")"
-            total_wheels=$((total_wheels + 1))
-            case "$base" in
-              *+cu128-*)
-                upsert_manifest_line "gh-pages/cu128/sageattention/links.tsv" "$base" "$hash" "$url"
-                copied_cu128=$((copied_cu128 + 1))
-                ;;
-              *+cu130-*)
-                upsert_manifest_line "gh-pages/cu130/sageattention/links.tsv" "$base" "$hash" "$url"
-                copied_cu130=$((copied_cu130 + 1))
-                ;;
-              *+cu132-*)
-                upsert_manifest_line "gh-pages/cu132/sageattention/links.tsv" "$base" "$hash" "$url"
-                copied_cu132=$((copied_cu132 + 1))
-                ;;
-              *+rocm10.1torch2.14-*)
-                upsert_manifest_line "gh-pages/rocm10.1/sageattention/links.tsv" "$base" "$hash" "$url"
-                copied_rocm101=$((copied_rocm101 + 1))
-                ;;
-              *)
-                echo "Unrecognized wheel name: $base"
-                exit 1
-                ;;
-            esac
+            upsert_manifest_line "gh-pages/$backend/sageattention/links.tsv" "$base" "$hash" "$url"
           done
-
-          if [[ "$total_wheels" -ne 8 || "$copied_cu128" -ne 2 || "$copied_cu130" -ne 2 || "$copied_cu132" -ne 2 || "$copied_rocm101" -ne 2 ]]; then
-            echo "Expected two wheels per backend, got cu128=${copied_cu128} cu130=${copied_cu130} cu132=${copied_cu132} rocm10.1=${copied_rocm101}"
-            exit 1
-          fi
 
           write_pkg_index () {
             local cu="$1"
@@ -484,17 +452,14 @@ jobs:
             } > "gh-pages/${cu}/index.html"
           }
 
-          write_pkg_index "cu128"
-          write_pkg_index "cu130"
-          write_pkg_index "cu132"
-          write_pkg_index "rocm10.1"
-
           {
             echo '<!doctype html><html><body>'
-            echo '<a href="cu128/">cu128</a><br/>'
-            echo '<a href="cu130/">cu130</a><br/>'
-            echo '<a href="cu132/">cu132</a><br/>'
-            echo '<a href="rocm10.1/">rocm10.1</a>'
+            for backend in cu128 cu130 cu132 rocm10.1; do
+              if [[ -s "gh-pages/$backend/sageattention/links.tsv" ]]; then
+                write_pkg_index "$backend"
+                printf '<a href="%s/">%s</a><br/>\n' "$backend" "$backend"
+              fi
+            done
             echo '</body></html>'
           } > gh-pages/index.html
 
