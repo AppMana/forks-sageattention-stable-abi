@@ -40,10 +40,17 @@ jobs:
           - cuda: "12.8"
             cuda_short: "128"
             cuda_toolkit: "12.8.1"
+            torch_version: "2.10.0"
             arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0"
           - cuda: "13.0"
             cuda_short: "130"
             cuda_toolkit: "13.0.2"
+            torch_version: "2.10.0"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
+          - cuda: "13.2"
+            cuda_short: "132"
+            cuda_toolkit: "13.2.0"
+            torch_version: "2.13.0"
             arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
     steps:
       - name: Checkout
@@ -74,7 +81,7 @@ jobs:
         run: |
           set -euo pipefail
           uv pip install --system packaging setuptools wheel numpy ninja
-          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.10.0
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==${{ matrix.torch_version }}
 
       - name: Build wheel
         shell: bash
@@ -108,7 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.10.0
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==${{ matrix.torch_version }}
           uv pip install --system --no-deps dist/*.whl
           cd /tmp
           python -c 'import sageattention; print(sageattention.__file__)'
@@ -132,10 +139,17 @@ jobs:
           - cuda: "12.8"
             cuda_short: "128"
             cuda_toolkit: "12.8.1"
+            torch_version: "2.10.0"
             arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0"
           - cuda: "13.0"
             cuda_short: "130"
             cuda_toolkit: "13.0.2"
+            torch_version: "2.10.0"
+            arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
+          - cuda: "13.2"
+            cuda_short: "132"
+            cuda_toolkit: "13.2.0"
+            torch_version: "2.13.0"
             arch_list: "8.0 8.6 8.7 8.9 9.0 10.0 12.0 12.1"
     steps:
       - name: Checkout
@@ -170,7 +184,7 @@ jobs:
         shell: pwsh
         run: |
           uv pip install --system packaging setuptools wheel numpy ninja
-          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.10.0
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==${{ matrix.torch_version }}
 
       - name: Build wheel
         shell: pwsh
@@ -205,7 +219,7 @@ jobs:
       - name: Smoke test wheel import
         shell: pwsh
         run: |
-          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==2.10.0
+          uv pip install --system --index-url https://download.pytorch.org/whl/cu${{ matrix.cuda_short }} torch==${{ matrix.torch_version }}
           $wheel = (Get-ChildItem dist\*.whl | Select-Object -First 1).FullName
           uv pip install --system --no-deps $wheel
           Push-Location $env:TEMP
@@ -262,6 +276,46 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  rocm-wheels:
+    name: ${{ matrix.os }} wheel (ROCm 10.1)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    defaults:
+      run:
+        shell: bash
+    env:
+      ROCM_INDEX_URL: https://stable.repo.amd.com/rocm/whl-next/
+      GPU_ARCHS: 'gfx1200;gfx1201'
+      MAX_JOBS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Install AMD PyTorch and ROCm build tools
+        run: |
+          python -m pip install --upgrade pip numpy packaging setuptools wheel ninja
+          python -m pip install --no-cache-dir --index-url "$ROCM_INDEX_URL" \
+            'torch[device-gfx1200]==2.14.0+rocm10.1.0' 'rocm-sdk-devel==10.1.0'
+          python -c 'import torch; assert torch.version.hip; print(torch.__version__, torch.version.hip)'
+      - name: Build and validate wheel
+        run: |
+          export SAGEATTENTION_WHEEL_VERSION_SUFFIX='.post1+rocm10.1torch2.14'
+          if [[ "$RUNNER_OS" == Windows ]]; then export DISTUTILS_USE_SDK=1; fi
+          python -m pip wheel . --no-build-isolation --no-deps --wheel-dir wheelhouse
+          python -c 'import glob, zipfile; wheel, = glob.glob("wheelhouse/*.whl"); assert "cp310-abi3" in wheel; assert "sageattention/rocm/triton_attn.py" in zipfile.ZipFile(wheel).namelist()'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sageattention-${{ runner.os }}-rocm10.1
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
   publish-nightly-release:
     name: Publish nightly prerelease
     runs-on: ubuntu-24.04
@@ -269,6 +323,7 @@ jobs:
       - release-meta
       - linux-wheels
       - windows-wheels
+      - rocm-wheels
     steps:
       - name: Download wheel artifacts
         uses: actions/download-artifact@v4
@@ -282,8 +337,8 @@ jobs:
           shopt -s nullglob
           wheels=(release-artifacts/*.whl)
           count="${#wheels[@]}"
-          if [[ "$count" -ne 4 ]]; then
-            echo "Expected exactly 4 wheel artifacts, found ${count}"
+          if [[ "$count" -ne 8 ]]; then
+            echo "Expected exactly 8 wheel artifacts, found ${count}"
             printf '%s\n' "${wheels[@]}"
             exit 1
           fi
@@ -310,6 +365,7 @@ jobs:
       - release-meta
       - linux-wheels
       - windows-wheels
+      - rocm-wheels
       - publish-nightly-release
     steps:
       - name: Download wheel artifacts
@@ -343,10 +399,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p gh-pages/cu128/sageattention
-          mkdir -p gh-pages/cu130/sageattention
-          touch gh-pages/cu128/sageattention/links.tsv
-          touch gh-pages/cu130/sageattention/links.tsv
+          for backend in cu128 cu130 cu132 rocm10.1; do
+            mkdir -p "gh-pages/$backend/sageattention"
+            touch "gh-pages/$backend/sageattention/links.tsv"
+          done
 
           release_base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}"
 
@@ -369,6 +425,8 @@ jobs:
           shopt -s nullglob
           copied_cu128=0
           copied_cu130=0
+          copied_cu132=0
+          copied_rocm101=0
           total_wheels=0
           for whl in release-artifacts/*.whl; do
             base="$(basename "$whl")"
@@ -384,14 +442,23 @@ jobs:
                 upsert_manifest_line "gh-pages/cu130/sageattention/links.tsv" "$base" "$hash" "$url"
                 copied_cu130=$((copied_cu130 + 1))
                 ;;
+              *+cu132-*)
+                upsert_manifest_line "gh-pages/cu132/sageattention/links.tsv" "$base" "$hash" "$url"
+                copied_cu132=$((copied_cu132 + 1))
+                ;;
+              *+rocm10.1torch2.14-*)
+                upsert_manifest_line "gh-pages/rocm10.1/sageattention/links.tsv" "$base" "$hash" "$url"
+                copied_rocm101=$((copied_rocm101 + 1))
+                ;;
               *)
-                echo "Skipping unrecognized wheel name: $base"
+                echo "Unrecognized wheel name: $base"
+                exit 1
                 ;;
             esac
           done
 
-          if [[ "$total_wheels" -ne 4 || "$copied_cu128" -ne 2 || "$copied_cu130" -ne 2 ]]; then
-            echo "Expected exactly 4 wheels (2 for cu128, 2 for cu130), got total=${total_wheels} cu128=${copied_cu128} cu130=${copied_cu130}"
+          if [[ "$total_wheels" -ne 8 || "$copied_cu128" -ne 2 || "$copied_cu130" -ne 2 || "$copied_cu132" -ne 2 || "$copied_rocm101" -ne 2 ]]; then
+            echo "Expected two wheels per backend, got cu128=${copied_cu128} cu130=${copied_cu130} cu132=${copied_cu132} rocm10.1=${copied_rocm101}"
             exit 1
           fi
 
@@ -418,11 +485,15 @@ jobs:
 
           write_pkg_index "cu128"
           write_pkg_index "cu130"
+          write_pkg_index "cu132"
+          write_pkg_index "rocm10.1"
 
           {
             echo '<!doctype html><html><body>'
             echo '<a href="cu128/">cu128</a><br/>'
-            echo '<a href="cu130/">cu130</a>'
+            echo '<a href="cu130/">cu130</a><br/>'
+            echo '<a href="cu132/">cu132</a><br/>'
+            echo '<a href="rocm10.1/">rocm10.1</a>'
             echo '</body></html>'
           } > gh-pages/index.html
 

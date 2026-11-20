@@ -22,6 +22,14 @@ If you see any error, please open an issue at https://github.com/woct0rdho/SageA
 
 We've simplified the installation by a lot. There is no need to install Visual Studio or CUDA toolkit to use Triton and SageAttention (unless you want to step into the world of building from source).
 
+### AppMana ROCm wheels
+
+With AMD PyTorch 2.14 for ROCm 10.1 installed, use this index on Linux or Windows:
+
+```sh
+pip install --index-url https://appmana.github.io/forks-sageattention-stable-abi/rocm10.1/ sageattention
+```
+
 ## Use notes
 
 Before using SageAttention in larger projects like ComfyUI, please run [test_sageattn.py](https://github.com/woct0rdho/SageAttention/blob/main/tests/test_sageattn.py) to test if SageAttention itself works.
